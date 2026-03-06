@@ -199,7 +199,7 @@ class TabManager {
     const id = tabId || this.activeTabId;
     if (!id || !this.tabs.has(id)) throw new Error('Tab not found');
 
-    return new Promise((resolve, reject) => {
+    const dataUrl = await new Promise((resolve, reject) => {
       const requestId = nextRequestId++;
 
       const timeout = setTimeout(() => {
@@ -210,6 +210,17 @@ class TabManager {
       this.pendingScreenshot.set(requestId, { resolve, reject, timeout });
       this.mainWindow.webContents.send('screenshot-webview', requestId, id, maxWidth, quality);
     });
+
+    // Convert PNG data URL to JPEG in main process (full Node.js Buffer access)
+    if (quality === 'jpeg' && dataUrl.startsWith('data:image/png')) {
+      const { nativeImage } = require('electron');
+      const base64 = dataUrl.replace(/^data:image\/png;base64,/, '');
+      const img = nativeImage.createFromBuffer(Buffer.from(base64, 'base64'));
+      const jpegBuffer = img.toJPEG(70);
+      return `data:image/jpeg;base64,${jpegBuffer.toString('base64')}`;
+    }
+
+    return dataUrl;
   }
 }
 

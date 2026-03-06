@@ -174,13 +174,8 @@ window.api.onScreenshotWebview(async (requestId, tabId, maxWidth, quality) => {
       resized = image.resize({ width: targetWidth });
     }
 
-    const fmt = quality === 'png' ? 'png' : 'jpeg';
-    let dataUrl;
-    if (fmt === 'jpeg') {
-      dataUrl = `data:image/jpeg;base64,${resized.toJPEG(70).toString('base64')}`;
-    } else {
-      dataUrl = resized.toDataURL();
-    }
+    // Always send PNG data URL from renderer - main process handles JPEG conversion
+    const dataUrl = resized.toDataURL();
     window.api.sendScreenshotResult(requestId, { dataUrl });
   } catch (err) {
     window.api.sendScreenshotResult(requestId, { error: err.message });
@@ -285,15 +280,18 @@ window.api.onWaitForLoad((requestId, tabId) => {
     window.api.sendLoadResult(requestId, { loaded: false, error: 'Tab not found' });
     return;
   }
-  if (!tab.webview.isLoading()) {
-    window.api.sendLoadResult(requestId, { loaded: true });
-    return;
-  }
-  const handler = () => {
-    tab.webview.removeEventListener('did-stop-loading', handler);
-    window.api.sendLoadResult(requestId, { loaded: true });
-  };
-  tab.webview.addEventListener('did-stop-loading', handler);
+  // Brief delay to let navigation initiate before checking isLoading
+  setTimeout(() => {
+    if (!tab.webview.isLoading()) {
+      window.api.sendLoadResult(requestId, { loaded: true });
+      return;
+    }
+    const handler = () => {
+      tab.webview.removeEventListener('did-stop-loading', handler);
+      window.api.sendLoadResult(requestId, { loaded: true });
+    };
+    tab.webview.addEventListener('did-stop-loading', handler);
+  }, 200);
 });
 
 // Signal ready and create initial tab
