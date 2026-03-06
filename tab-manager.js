@@ -31,6 +31,26 @@ class TabManager {
         else p.resolve(result.dataUrl);
       }
     });
+
+    // Console log buffer per tab
+    this.consoleLogs = new Map();
+    ipcMain.on('console-message', (e, tabId, entry) => {
+      if (!this.consoleLogs.has(tabId)) this.consoleLogs.set(tabId, []);
+      const logs = this.consoleLogs.get(tabId);
+      logs.push(entry);
+      if (logs.length > 200) logs.splice(0, logs.length - 200);
+    });
+
+    // Wait-for-load support
+    this.pendingLoad = new Map();
+    ipcMain.on('load-result', (e, requestId, result) => {
+      const p = this.pendingLoad.get(requestId);
+      if (p) {
+        this.pendingLoad.delete(requestId);
+        clearTimeout(p.timeout);
+        p.resolve(result);
+      }
+    });
   }
 
   createTab(url = 'about:blank') {
@@ -52,6 +72,7 @@ class TabManager {
     if (!this.tabs.has(tabId)) return { success: false, error: 'Tab not found' };
 
     this.tabs.delete(tabId);
+    this.consoleLogs.delete(tabId);
     this.mainWindow.webContents.send('tab-closed', tabId);
 
     if (this.activeTabId === tabId) {
@@ -143,6 +164,34 @@ class TabManager {
 
       this.pendingExec.set(requestId, { resolve, reject, timeout });
       this.mainWindow.webContents.send('exec-in-webview', requestId, id, code);
+    });
+  }
+
+  getConsoleLogs(tabId, options = {}) {
+    const id = tabId || this.activeTabId;
+    let logs = this.consoleLogs.get(id) || [];
+    if (options.clear) this.consoleLogs.set(id, []);
+    if (options.level) logs = logs.filter(l => l.level === options.level);
+    if (options.pattern) {
+      const re = new RegExp(options.pattern, 'i');
+      logs = logs.filter(l => re.test(l.message));
+    }
+    return logs.slice(-100);
+  }
+
+  async waitForTabLoad(tabId, timeout = 15000) {
+    const id = tabId || this.activeTabId;
+    if (!id) throw new Error('No active tab');
+
+    return new Promise((resolve) => {
+      const requestId = nextRequestId++;
+      const timer = setTimeout(() => {
+        this.pendingLoad.delete(requestId);
+        resolve({ loaded: false, timedOut: true });
+      }, timeout);
+
+      this.pendingLoad.set(requestId, { resolve, timeout: timer });
+      this.mainWindow.webContents.send('wait-for-load', requestId, id);
     });
   }
 

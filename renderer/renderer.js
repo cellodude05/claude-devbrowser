@@ -47,6 +47,17 @@ window.api.onTabCreated((tab) => {
     window.api.navigate(tab.id, e.url);
   });
 
+  // Capture console messages
+  webview.addEventListener('console-message', (e) => {
+    window.api.sendConsoleMessage(tab.id, {
+      level: ['verbose', 'info', 'warning', 'error'][e.level] || 'info',
+      message: e.message,
+      line: e.line,
+      source: e.sourceId,
+      timestamp: Date.now(),
+    });
+  });
+
   // Webview events
   webview.addEventListener('did-start-loading', () => {
     updateTabLoading(tab.id, true);
@@ -265,6 +276,24 @@ document.addEventListener('keydown', (e) => {
         break;
     }
   }
+});
+
+// Wait-for-load handler
+window.api.onWaitForLoad((requestId, tabId) => {
+  const tab = tabs.get(tabId);
+  if (!tab) {
+    window.api.sendLoadResult(requestId, { loaded: false, error: 'Tab not found' });
+    return;
+  }
+  if (!tab.webview.isLoading()) {
+    window.api.sendLoadResult(requestId, { loaded: true });
+    return;
+  }
+  const handler = () => {
+    tab.webview.removeEventListener('did-stop-loading', handler);
+    window.api.sendLoadResult(requestId, { loaded: true });
+  };
+  tab.webview.addEventListener('did-stop-loading', handler);
 });
 
 // Signal ready and create initial tab

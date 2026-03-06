@@ -23,9 +23,14 @@ contextBridge.exposeInMainWorld('api', {
   onExecInWebview: (cb) => ipcRenderer.on('exec-in-webview', (e, requestId, tabId, code) => cb(requestId, tabId, code)),
   onScreenshotWebview: (cb) => ipcRenderer.on('screenshot-webview', (e, requestId, tabId, maxWidth, quality) => cb(requestId, tabId, maxWidth, quality)),
 
+  // Wait-for-load (main → renderer)
+  onWaitForLoad: (cb) => ipcRenderer.on('wait-for-load', (e, requestId, tabId) => cb(requestId, tabId)),
+
   // Response channels (renderer → main)
   sendExecResult: (requestId, result) => ipcRenderer.send('exec-result', requestId, result),
   sendScreenshotResult: (requestId, result) => ipcRenderer.send('screenshot-result', requestId, result),
+  sendLoadResult: (requestId, result) => ipcRenderer.send('load-result', requestId, result),
+  sendConsoleMessage: (tabId, entry) => ipcRenderer.send('console-message', tabId, entry),
 
   rendererReady: () => ipcRenderer.send('renderer-ready'),
 });

@@ -99,7 +99,7 @@ Ask Claude something like:
 ### Navigation
 | Tool | Description |
 |------|-------------|
-| `devbrowser_navigate` | Go to a URL. Pass `newTab: true` to open in a new tab. |
+| `devbrowser_navigate` | Go to a URL. Auto-waits for page load. Pass `newTab: true` for a new tab. |
 | `devbrowser_go_back` | Browser back button |
 | `devbrowser_go_forward` | Browser forward button |
 
@@ -110,7 +110,7 @@ Ask Claude something like:
 | `devbrowser_get_page_html` | Get HTML (optionally filtered by CSS `selector`) |
 | `devbrowser_get_page_info` | Get current URL and page title |
 | `devbrowser_find_elements` | Query DOM elements by CSS selector (returns tag, text, attributes) |
-| `devbrowser_get_section_text` | Get text from a specific page section by CSS selector. Pass `maxLength` to control size. |
+| `devbrowser_get_section_text` | Get text from a specific page section by CSS selector |
 
 ### Search & Navigation Within Page
 | Tool | Description |
@@ -121,17 +121,29 @@ Ask Claude something like:
 ### Interaction
 | Tool | Description |
 |------|-------------|
-| `devbrowser_click` | Click an element by CSS selector |
+| `devbrowser_click` | Click an element by CSS selector. Pass `waitForLoad: true` if it triggers navigation. |
 | `devbrowser_type` | Type text into an input field |
+| `devbrowser_press_key` | Send keyboard events (Enter, Tab, Escape, ArrowDown, etc.) with optional modifiers |
+| `devbrowser_hover` | Hover over an element to reveal menus/tooltips |
 | `devbrowser_select` | Choose a dropdown option |
+| `devbrowser_upload_file` | Upload a local file to a file input element |
 | `devbrowser_scroll` | Scroll up or down by pixel amount |
 | `devbrowser_execute_js` | Run arbitrary JavaScript in the page |
+| `devbrowser_execute_in_frame` | Run JavaScript inside an iframe (same-origin only) |
 | `devbrowser_wait_for` | Wait for an element to appear (with timeout) |
 
-### Screenshots
+### Console & Network
+| Tool | Description |
+|------|-------------|
+| `devbrowser_read_console` | Read console log messages from a page. Filter by level or pattern. |
+| `devbrowser_read_network` | Read captured network requests. Filter by URL pattern, type, or status code. |
+| `devbrowser_get_cookies` | Get cookies for a URL or domain from the browser session |
+
+### Screenshots & Snapshots
 | Tool | Description |
 |------|-------------|
 | `devbrowser_screenshot` | Capture the page as a compressed JPEG image. Pass `maxWidth` and `quality` (jpeg/png). |
+| `devbrowser_save_snapshot` | Save page content (title, URL, text) to a local markdown file for later reference |
 
 ### Tab Management
 | Tool | Description |
@@ -143,6 +155,10 @@ Ask Claude something like:
 | `devbrowser_quit` | Quit the DevBrowser app to free resources |
 
 All tools accept an optional `tabId` parameter. If omitted, they target the active tab.
+
+## Multi-Agent Support
+
+Multiple Claude Code sessions can share the same DevBrowser instance. Each session connects to the shared Electron app via WebSocket. Tab IDs are globally unique, so agents won't collide. If no instance is running, the first agent to call a tool will auto-launch one. If `DEVBROWSER_PORT` is not set, the MCP server dynamically finds a free port.
 
 ## Configuration
 

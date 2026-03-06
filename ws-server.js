@@ -1,8 +1,50 @@
 const { WebSocketServer } = require('ws');
+const fs = require('fs');
+const path = require('path');
 
 const PORT = parseInt(process.env.DEVBROWSER_PORT || '19816', 10);
 let wss = null;
 let tabManager = null;
+
+// Network request buffer (lazy-initialized)
+const networkRequests = [];
+const MAX_NETWORK_BUFFER = 500;
+let networkCaptureActive = false;
+
+function ensureNetworkCapture() {
+  if (networkCaptureActive) return;
+  networkCaptureActive = true;
+
+  const { session } = require('electron');
+  const ses = session.fromPartition('persist:devbrowser');
+
+  ses.webRequest.onCompleted((details) => {
+    networkRequests.push({
+      url: details.url,
+      method: details.method,
+      statusCode: details.statusCode,
+      type: details.resourceType,
+      fromCache: details.fromCache,
+      timestamp: Date.now(),
+    });
+    if (networkRequests.length > MAX_NETWORK_BUFFER) {
+      networkRequests.splice(0, networkRequests.length - MAX_NETWORK_BUFFER);
+    }
+  });
+
+  ses.webRequest.onErrorOccurred((details) => {
+    networkRequests.push({
+      url: details.url,
+      method: details.method,
+      error: details.error,
+      type: details.resourceType,
+      timestamp: Date.now(),
+    });
+    if (networkRequests.length > MAX_NETWORK_BUFFER) {
+      networkRequests.splice(0, networkRequests.length - MAX_NETWORK_BUFFER);
+    }
+  });
+}
 
 function createWSServer(tm) {
   tabManager = tm;
@@ -10,6 +52,8 @@ function createWSServer(tm) {
 
   wss.on('listening', () => {
     console.log(`DevBrowser WS server listening on 127.0.0.1:${PORT}`);
+    // Start network capture once server is up
+    ensureNetworkCapture();
   });
 
   wss.on('connection', (ws) => {
@@ -40,6 +84,12 @@ function createWSServer(tm) {
   });
 
   wss.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`Port ${PORT} already in use. Another DevBrowser instance may be running.`);
+      const { app } = require('electron');
+      app.quit();
+      return;
+    }
     console.error('WS server error:', err.message);
   });
 }
@@ -51,28 +101,50 @@ function stopWSServer() {
   }
 }
 
+// Simple mime type lookup for file uploads
+function getMimeType(filename) {
+  const ext = path.extname(filename).toLowerCase();
+  const types = {
+    '.txt': 'text/plain', '.html': 'text/html', '.css': 'text/css',
+    '.js': 'application/javascript', '.json': 'application/json',
+    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp',
+    '.pdf': 'application/pdf', '.zip': 'application/zip',
+    '.csv': 'text/csv', '.xml': 'text/xml',
+    '.doc': 'application/msword', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.xls': 'application/vnd.ms-excel', '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  };
+  return types[ext] || 'application/octet-stream';
+}
+
 async function handleCommand(method, params) {
   switch (method) {
-    // Navigation
+    // ── Navigation ──────────────────────────────────────────────────────
     case 'navigate': {
-      const { url, newTab } = params;
+      const { url, newTab, waitForLoad } = params;
       if (!url) throw new Error('url is required');
+      let result;
       if (newTab) {
         const tab = tabManager.createTab(url);
-        return { tabId: tab.id, url };
+        result = { tabId: tab.id, url };
+      } else {
+        result = tabManager.navigate(params.tabId, url);
       }
-      return tabManager.navigate(params.tabId, url);
+      if (waitForLoad !== false) {
+        const id = result.tabId || params.tabId || tabManager.getActiveTabId();
+        await tabManager.waitForTabLoad(id);
+      }
+      return result;
     }
     case 'go_back':
       return tabManager.goBack(params.tabId);
     case 'go_forward':
       return tabManager.goForward(params.tabId);
 
-    // Content reading
+    // ── Content Reading ─────────────────────────────────────────────────
     case 'get_page_text': {
       const maxLength = params.maxLength || 50000;
       const code = `(() => {
-        // Try to extract main content area first
         const main = document.querySelector('main, article, [role="main"], .main-content, #content, #main');
         const source = main || document.body;
         let text = source.innerText;
@@ -94,7 +166,7 @@ async function handleCommand(method, params) {
       return JSON.parse(raw);
     }
 
-    // Interaction
+    // ── Interaction ─────────────────────────────────────────────────────
     case 'click': {
       if (!params.selector) throw new Error('selector is required');
       const code = `(() => {
@@ -103,7 +175,11 @@ async function handleCommand(method, params) {
         el.click();
         return JSON.stringify({ success: true, tag: el.tagName, text: el.textContent.slice(0, 100) });
       })()`;
-      return JSON.parse(await tabManager.executeInTab(params.tabId, code));
+      const result = JSON.parse(await tabManager.executeInTab(params.tabId, code));
+      if (result.success && params.waitForLoad) {
+        await tabManager.waitForTabLoad(params.tabId);
+      }
+      return result;
     }
     case 'type': {
       if (!params.selector) throw new Error('selector is required');
@@ -180,7 +256,7 @@ async function handleCommand(method, params) {
       return JSON.parse(await tabManager.executeInTab(params.tabId, code));
     }
 
-    // Find text on page
+    // ── Page Search & Navigation ────────────────────────────────────────
     case 'find_text': {
       if (!params.text) throw new Error('text is required');
       const searchText = JSON.stringify(params.text);
@@ -207,8 +283,6 @@ async function handleCommand(method, params) {
       })()`;
       return JSON.parse(await tabManager.executeInTab(params.tabId, code));
     }
-
-    // Scroll to element
     case 'scroll_to': {
       if (!params.selector) throw new Error('selector is required');
       const code = `(() => {
@@ -219,8 +293,6 @@ async function handleCommand(method, params) {
       })()`;
       return JSON.parse(await tabManager.executeInTab(params.tabId, code));
     }
-
-    // Get text from specific section
     case 'get_section_text': {
       if (!params.selector) throw new Error('selector is required');
       const maxLength = params.maxLength || 10000;
@@ -236,7 +308,160 @@ async function handleCommand(method, params) {
       return JSON.parse(await tabManager.executeInTab(params.tabId, code));
     }
 
-    // Screenshots
+    // ── Keyboard & Mouse ────────────────────────────────────────────────
+    case 'press_key': {
+      if (!params.key) throw new Error('key is required');
+      const selectorCode = params.selector
+        ? `document.querySelector(${JSON.stringify(params.selector)})`
+        : 'document.activeElement';
+      const code = `(() => {
+        const el = ${selectorCode};
+        if (!el) return JSON.stringify({ success: false, error: 'Element not found' });
+        const opts = {
+          key: ${JSON.stringify(params.key)},
+          code: ${JSON.stringify(params.key)},
+          bubbles: true,
+          cancelable: true,
+          shiftKey: ${!!params.shift},
+          ctrlKey: ${!!params.ctrl},
+          altKey: ${!!params.alt},
+          metaKey: ${!!params.meta},
+        };
+        el.dispatchEvent(new KeyboardEvent('keydown', opts));
+        el.dispatchEvent(new KeyboardEvent('keypress', opts));
+        el.dispatchEvent(new KeyboardEvent('keyup', opts));
+        return JSON.stringify({ success: true });
+      })()`;
+      return JSON.parse(await tabManager.executeInTab(params.tabId, code));
+    }
+    case 'hover': {
+      if (!params.selector) throw new Error('selector is required');
+      const code = `(() => {
+        const el = document.querySelector(${JSON.stringify(params.selector)});
+        if (!el) return JSON.stringify({ success: false, error: 'Element not found' });
+        el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+        el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        return JSON.stringify({ success: true, tag: el.tagName, text: el.textContent.slice(0, 100).trim() });
+      })()`;
+      return JSON.parse(await tabManager.executeInTab(params.tabId, code));
+    }
+
+    // ── iFrame Support ──────────────────────────────────────────────────
+    case 'execute_in_frame': {
+      if (!params.frameSelector) throw new Error('frameSelector is required');
+      if (!params.code) throw new Error('code is required');
+      const code = `(() => {
+        const iframe = document.querySelector(${JSON.stringify(params.frameSelector)});
+        if (!iframe) return JSON.stringify({ error: 'Frame not found' });
+        try {
+          const fn = new iframe.contentWindow.Function(${JSON.stringify('return ' + params.code)});
+          const result = fn();
+          return JSON.stringify({ result });
+        } catch (e) {
+          return JSON.stringify({ error: e.message });
+        }
+      })()`;
+      return JSON.parse(await tabManager.executeInTab(params.tabId, code));
+    }
+
+    // ── Console & Network ───────────────────────────────────────────────
+    case 'read_console': {
+      const logs = tabManager.getConsoleLogs(params.tabId, {
+        level: params.level,
+        pattern: params.pattern,
+        clear: params.clear,
+      });
+      return { messages: logs, count: logs.length };
+    }
+    case 'read_network': {
+      let filtered = [...networkRequests];
+      if (params.urlPattern) {
+        const re = new RegExp(params.urlPattern, 'i');
+        filtered = filtered.filter(r => re.test(r.url));
+      }
+      if (params.type) {
+        filtered = filtered.filter(r => r.type === params.type);
+      }
+      if (params.statusCode) {
+        filtered = filtered.filter(r => r.statusCode === params.statusCode);
+      }
+      if (params.clear) {
+        networkRequests.length = 0;
+      }
+      return { requests: filtered.slice(-100), count: filtered.length };
+    }
+
+    // ── Cookies ─────────────────────────────────────────────────────────
+    case 'get_cookies': {
+      const { session } = require('electron');
+      const ses = session.fromPartition('persist:devbrowser');
+      const filter = {};
+      if (params.url) filter.url = params.url;
+      if (params.domain) filter.domain = params.domain;
+      const cookies = await ses.cookies.get(filter);
+      return {
+        cookies: cookies.map(c => ({
+          name: c.name,
+          value: c.value,
+          domain: c.domain,
+          path: c.path,
+          secure: c.secure,
+          httpOnly: c.httpOnly,
+          expirationDate: c.expirationDate,
+        })),
+      };
+    }
+
+    // ── File Upload ─────────────────────────────────────────────────────
+    case 'upload_file': {
+      if (!params.selector) throw new Error('selector is required');
+      if (!params.filePath) throw new Error('filePath is required');
+
+      const filePath = params.filePath;
+      if (!fs.existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
+
+      const fileName = path.basename(filePath);
+      const fileData = fs.readFileSync(filePath).toString('base64');
+      const mimeType = getMimeType(fileName);
+
+      const code = `(() => {
+        const input = document.querySelector(${JSON.stringify(params.selector)});
+        if (!input) return JSON.stringify({ success: false, error: 'Element not found' });
+        try {
+          const byteChars = atob(${JSON.stringify(fileData)});
+          const byteArray = new Uint8Array(byteChars.length);
+          for (let i = 0; i < byteChars.length; i++) byteArray[i] = byteChars.charCodeAt(i);
+          const file = new File([byteArray], ${JSON.stringify(fileName)}, { type: ${JSON.stringify(mimeType)} });
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          input.files = dt.files;
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          return JSON.stringify({ success: true, fileName: ${JSON.stringify(fileName)} });
+        } catch (e) {
+          return JSON.stringify({ success: false, error: e.message });
+        }
+      })()`;
+      return JSON.parse(await tabManager.executeInTab(params.tabId, code));
+    }
+
+    // ── Page Snapshots ──────────────────────────────────────────────────
+    case 'save_snapshot': {
+      const os = require('os');
+      const snapshotPath = params.filePath || path.join(os.tmpdir(), `devbrowser-snapshot-${Date.now()}.md`);
+
+      const info = JSON.parse(await tabManager.executeInTab(params.tabId,
+        'JSON.stringify({ url: location.href, title: document.title })'));
+      const text = await tabManager.executeInTab(params.tabId, `(() => {
+        const main = document.querySelector('main, article, [role="main"]');
+        return (main || document.body).innerText;
+      })()`);
+
+      const content = `# ${info.title}\n\nURL: ${info.url}\nSaved: ${new Date().toISOString()}\n\n${text}`;
+      fs.writeFileSync(snapshotPath, content, 'utf-8');
+      return { success: true, filePath: snapshotPath, title: info.title, url: info.url };
+    }
+
+    // ── Screenshots ─────────────────────────────────────────────────────
     case 'screenshot': {
       const maxWidth = params.maxWidth || 800;
       const quality = params.quality || 'jpeg';
@@ -244,7 +469,7 @@ async function handleCommand(method, params) {
       return { image: dataUrl };
     }
 
-    // Tab management
+    // ── Tab Management ──────────────────────────────────────────────────
     case 'list_tabs':
       return { tabs: tabManager.listTabs() };
     case 'new_tab': {
@@ -258,7 +483,7 @@ async function handleCommand(method, params) {
     case 'close_tab':
       return tabManager.closeTab(params.tabId || tabManager.getActiveTabId());
 
-    // App lifecycle
+    // ── App Lifecycle ───────────────────────────────────────────────────
     case 'quit': {
       const { app } = require('electron');
       setTimeout(() => app.quit(), 100);
