@@ -1,0 +1,16 @@
+{
+  "name": "claude-devbrowser",
+  "version": "1.0.0",
+  "description": "Electron-based GUI browser controlled by Claude Code via MCP",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "mcp": "node mcp-server.js"
+  },
+  "dependencies": {
+    "electron": "^35.0.0",
+    "ws": "^8.18.0",
+    "@anthropic-ai/sdk": "^0.39.0"
+  },
+  "devDependencies": {}
+}

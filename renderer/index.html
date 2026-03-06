@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude DevBrowser</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="toolbar">
+    <div id="tab-bar">
+      <div id="tabs-container"></div>
+      <button id="new-tab-btn" title="New Tab (⌘T)">+</button>
+    </div>
+    <div id="nav-bar">
+      <button id="back-btn" class="nav-btn" title="Back (⌘[)">◀</button>
+      <button id="forward-btn" class="nav-btn" title="Forward (⌘])">▶</button>
+      <button id="reload-btn" class="nav-btn" title="Reload (⌘R)">↻</button>
+      <input id="url-bar" type="text" placeholder="Enter URL..." spellcheck="false">
+      <div id="mcp-status" title="MCP Connection">●</div>
+    </div>
+  </div>
+  <div id="webview-container"></div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

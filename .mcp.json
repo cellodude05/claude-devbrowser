@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "devbrowser": {
+      "command": "node",
+      "args": ["/Users/ksried/dev/utilities/claude-devbrowser/mcp-server.js"]
+    }
+  }
+}
