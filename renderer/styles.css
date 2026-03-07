@@ -34,7 +34,6 @@ body {
   gap: 2px;
   flex: 1;
   overflow-x: auto;
-  -webkit-app-region: no-drag;
 }
 
 .tab {

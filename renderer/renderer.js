@@ -36,9 +36,7 @@ window.api.onTabCreated((tab) => {
   const webview = document.createElement('webview');
   webview.setAttribute('allowpopups', '');
   webview.setAttribute('partition', 'persist:devbrowser');
-  if (tab.url && tab.url !== 'about:blank') {
-    webview.src = tab.url;
-  }
+  webview.src = tab.url || 'about:blank';
   webviewContainer.appendChild(webview);
 
   // Intercept new window requests (target="_blank" links, window.open, etc.)
